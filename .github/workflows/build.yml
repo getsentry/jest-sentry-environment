@@ -24,6 +24,9 @@ jobs:
         with:
           ref: ${{ env.HEAD_COMMIT }}
       - uses: actions/setup-node@v3
+        with:
+          node-version: 16
+          cache: 'npm'
       - name: Install dependencies
         run: npm install
       - name: pack
