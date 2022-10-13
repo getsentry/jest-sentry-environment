@@ -1,5 +1,5 @@
 {
-  "name": "@sentry/jest-sentry-environment",
+  "name": "@sentry/jest-environment",
   "version": "4.0.0-alpha.0",
   "description": "Automatic performance and profiling instrumentation for your jest tests.",
   "scripts": {
