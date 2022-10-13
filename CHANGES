@@ -1,0 +1,14 @@
+## 4.0.0-alpha.1
+
+### Various fixes & improvements
+
+- npm(name): rename pkg to jest-environment (#14) by @JonasBa
+- npm(scope): add @sentry package scope (#14) by @JonasBa
+- fix(craft): add config (#13) by @JonasBa
+- fix(ci): add cache (#12) by @JonasBa
+- feat(ci): setup craft (#12) by @JonasBa
+- fix(readme): add profiling doc (#11) by @JonasBa
+- 4.0.0-alpha.0 (#11) by @JonasBa
+- feat(sentry): enable profiling (#8) by @JonasBa
+- fix(sentry): only call init once (#7) by @JonasBa
+
