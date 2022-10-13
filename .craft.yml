@@ -1,0 +1,10 @@
+github:
+  owner: getsentry
+  repo: jest-sentry-environment
+changelog: CHANGES
+changelogPolicy: auto
+targets:
+  - name: npm
+    access: public
+  - name: github
+    tagPrefix: v
