@@ -1,30 +1,32 @@
+const { Worker } = require("node:worker_threads");
+
 const Sentry = require("@sentry/node");
 require("@sentry/tracing");
-const {ProfilingIntegration} = require("@sentry/profiling-node");
+const { ProfilingIntegration } = require("@sentry/profiling-node");
+const { TestEnvironment } = require("jest-environment-jsdom");
 
-let DID_INIT_SENTRY = false;
+const { createNodeWorkerTransport } = require("./createWorkerTransport");
 
 function isNotTransaction(span) {
   return span.op !== "jest test";
 }
 
-function createEnvironment({ baseEnvironment } = {}) {
-  const BaseEnvironment = baseEnvironment || require("jest-environment-jsdom");
-
-  return class SentryEnvironment extends BaseEnvironment {
+function createEnvironment(options = { baseEnvironment: TestEnvironment }) {
+  return class SentryEnvironment extends options.baseEnvironment {
     constructor(...args) {
       super(...args);
 
       const [config, context] = args;
 
-      this.options = config.projectConfig.testEnvironmentOptions?.sentryConfig
+      this.options = config.projectConfig.testEnvironmentOptions?.sentryConfig;
 
+      console.log(this.options);
       if (
         !this.options ||
         // Do not include in watch mode... unfortunately, I don't think there's
         // a better watch to detect when jest is in watch mode
-        process.argv.includes('--watch') ||
-        process.argv.includes('--watchAll')
+        process.argv.includes("--watch") ||
+        process.argv.includes("--watchAll")
       ) {
         return;
       }
@@ -32,18 +34,20 @@ function createEnvironment({ baseEnvironment } = {}) {
       const { init } = this.options;
 
       this.Sentry = Sentry;
-      if(!DID_INIT_SENTRY) {
-        // Ensure integration is an array as init is a user input
-        if(!Array.isArray(init.integrations)) {
-          init.integrations = [];
-        }
-
-        // Add profiling integration
-        init.integrations.push(new ProfilingIntegration());
-
-        this.Sentry.init(init);
-        DID_INIT_SENTRY = true
+      // Ensure integration is an array as init is a user input
+      if (!Array.isArray(init.integrations)) {
+        init.integrations = [];
       }
+
+      if (init.profilesSampleRate > 0 && init.transport === undefined) {
+        this.transportWorker = new Worker("./worker.transport.js");
+        init.transport = createNodeWorkerTransport(transportWorker);
+      }
+
+      // Add profiling integration
+      init.integrations.push(new ProfilingIntegration());
+
+      this.Sentry.init(init);
 
       this.testPath = context.testPath.replace(process.cwd(), "");
 
@@ -83,6 +87,7 @@ function createEnvironment({ baseEnvironment } = {}) {
     async teardown() {
       if (!this.Sentry || !this.transaction) {
         await super.teardown();
+        this.transportWorker.terminate();
         return;
       }
 
@@ -101,6 +106,7 @@ function createEnvironment({ baseEnvironment } = {}) {
       this.hooks = null;
       this.hub = null;
       this.Sentry = null;
+      this.transportWorker.terminate();
     }
 
     getVmContext() {
@@ -253,10 +259,7 @@ function createEnvironment({ baseEnvironment } = {}) {
         const span =
           parentObj && parentStore.has(parentName)
             ? Array.isArray(parentStore.get(parentName))
-              ? parentStore
-                  .get(parentName)
-                  .map((s) =>
-                    s.startChild(spanProps))
+              ? parentStore.get(parentName).map((s) => s.startChild(spanProps))
               : [parentStore.get(parentName).startChild(spanProps)]
             : [this.transaction.startChild(spanProps)];
 
@@ -273,7 +276,7 @@ function createEnvironment({ baseEnvironment } = {}) {
             parentSpanId: span[0].spanId,
             traceId: span[0].transaction.traceId,
             tags: this.options.transactionOptions?.tags,
-          })
+          });
           spans.push(testTransaction);
 
           // ensure that the test transaction is on the scope while it's happening
@@ -307,7 +310,9 @@ function createEnvironment({ baseEnvironment } = {}) {
           // if this is finishing a jest test span, then put the test suite transaction
           // back on the scope
           if (span.op === "jest test") {
-            this.Sentry.configureScope((scope) => scope.setSpan(this.transaction));
+            this.Sentry.configureScope((scope) =>
+              scope.setSpan(this.transaction)
+            );
           }
         });
       }

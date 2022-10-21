@@ -3,7 +3,7 @@
   "version": "4.0.0-alpha.0",
   "description": "Automatic performance and profiling instrumentation for your jest tests.",
   "scripts": {
-    "test": "npm test"
+    "test": "jest"
   },
   "repository": {
     "type": "git",
@@ -33,6 +33,8 @@
   },
   "homepage": "https://github.com/billyvg/jest-sentry-environment#readme",
   "devDependencies": {
+    "jest": "^29.2.1",
+    "jest-environment-jsdom": "^29.2.1",
     "prettier": "^2.3.2"
   },
   "peerDependencies": {
