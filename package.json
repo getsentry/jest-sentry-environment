@@ -37,7 +37,7 @@
   },
   "peerDependencies": {
     "@sentry/node": ">=6",
-    "@sentry/profiling-node": ">=0.0.1",
+    "@sentry/profiling-node": ">=0.0.12",
     "@sentry/tracing": ">=6",
     "jest": ">=28"
   }
