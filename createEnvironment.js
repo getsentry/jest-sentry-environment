@@ -12,6 +12,8 @@ function createEnvironment({ baseEnvironment } = {}) {
   const BaseEnvironment = baseEnvironment || require("jest-environment-jsdom");
 
   return class SentryEnvironment extends BaseEnvironment {
+    getVmContextSpanStack = [];
+    
     constructor(...args) {
       super(...args);
 
@@ -104,10 +106,11 @@ function createEnvironment({ baseEnvironment } = {}) {
     }
 
     getVmContext() {
-      if (this.transaction && !this.getVmContextSpan) {
-        this.getVmContextSpan = this.transaction.startChild({
+      if (this.transaction) {
+        const getVmContextSpan = this.transaction.startChild({
           op: "getVmContext",
-        });
+        })
+        this.getVmContextSpanStack.push(getVmContextSpan);
       }
       return super.getVmContext();
     }
@@ -130,9 +133,11 @@ function createEnvironment({ baseEnvironment } = {}) {
       switch (name) {
         case "run_describe_start":
         case "run_describe_finish":
-          if (this.getVmContextSpan) {
-            this.getVmContextSpan.finish();
-            this.getVmContextSpan = null;
+          if (name === "run_describe_finish") {
+            const span = this.getVmContextSpanStack.pop();
+            if(span){
+              span.finish();
+            }
           }
 
           return {
