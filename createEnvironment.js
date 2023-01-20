@@ -1,8 +1,6 @@
 const Sentry = require("@sentry/node");
 require("@sentry/tracing");
-const {ProfilingIntegration} = require("@sentry/profiling-node");
-
-let DID_INIT_SENTRY = false;
+const { ProfilingIntegration } = require("@sentry/profiling-node");
 
 function isNotTransaction(span) {
   return span.op !== "jest test";
@@ -19,14 +17,22 @@ function createEnvironment({ baseEnvironment } = {}) {
 
       const [config, context] = args;
 
-      this.options = config.projectConfig.testEnvironmentOptions?.sentryConfig
+      this.options = config.projectConfig.testEnvironmentOptions?.sentryConfig;
+
+      // Allow sharing of globals between tests
+      if (config.projectConfig.testEnvironmentOptions.global) {
+        for (const key in config.projectConfig.testEnvironmentOptions?.global) {
+          this.global[key] =
+            config.projectConfig.testEnvironmentOptions?.global[key];
+        }
+      }
 
       if (
         !this.options ||
         // Do not include in watch mode... unfortunately, I don't think there's
         // a better watch to detect when jest is in watch mode
-        process.argv.includes('--watch') ||
-        process.argv.includes('--watchAll')
+        process.argv.includes("--watch") ||
+        process.argv.includes("--watchAll")
       ) {
         return;
       }
@@ -34,18 +40,14 @@ function createEnvironment({ baseEnvironment } = {}) {
       const { init } = this.options;
 
       this.Sentry = Sentry;
-      if(!DID_INIT_SENTRY) {
-        // Ensure integration is an array as init is a user input
-        if(!Array.isArray(init.integrations)) {
-          init.integrations = [];
-        }
-
-        // Add profiling integration
-        init.integrations.push(new ProfilingIntegration());
-
-        this.Sentry.init(init);
-        DID_INIT_SENTRY = true
+      // Ensure integration is an array as init is a user input
+      if (!Array.isArray(init.integrations)) {
+        init.integrations = [];
       }
+
+      // Add profiling integration
+      init.integrations.push(new ProfilingIntegration());
+      this.Sentry.init(init);
 
       this.testPath = context.testPath.replace(process.cwd(), "");
 
@@ -258,10 +260,7 @@ function createEnvironment({ baseEnvironment } = {}) {
         const span =
           parentObj && parentStore.has(parentName)
             ? Array.isArray(parentStore.get(parentName))
-              ? parentStore
-                  .get(parentName)
-                  .map((s) =>
-                    s.startChild(spanProps))
+              ? parentStore.get(parentName).map((s) => s.startChild(spanProps))
               : [parentStore.get(parentName).startChild(spanProps)]
             : [this.transaction.startChild(spanProps)];
 
@@ -278,7 +277,7 @@ function createEnvironment({ baseEnvironment } = {}) {
             parentSpanId: span[0].spanId,
             traceId: span[0].transaction.traceId,
             tags: this.options.transactionOptions?.tags,
-          })
+          });
           spans.push(testTransaction);
 
           // ensure that the test transaction is on the scope while it's happening
@@ -312,7 +311,9 @@ function createEnvironment({ baseEnvironment } = {}) {
           // if this is finishing a jest test span, then put the test suite transaction
           // back on the scope
           if (span.op === "jest test") {
-            this.Sentry.configureScope((scope) => scope.setSpan(this.transaction));
+            this.Sentry.configureScope((scope) =>
+              scope.setSpan(this.transaction)
+            );
           }
         });
       }
