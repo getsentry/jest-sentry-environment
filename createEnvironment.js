@@ -13,7 +13,7 @@ function createEnvironment({ baseEnvironment } = {}) {
 
   return class SentryEnvironment extends BaseEnvironment {
     getVmContextSpanStack = [];
-    
+
     constructor(...args) {
       super(...args);
 
@@ -295,7 +295,9 @@ function createEnvironment({ baseEnvironment } = {}) {
 
         if (name.includes("failure")) {
           if (event.error) {
-            this.Sentry.captureException(event.error);
+            this.Sentry.captureException(event.error, {
+              tags: this.options.transactionOptions?.tags,
+            });
           }
         }
 
