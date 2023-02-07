@@ -13,7 +13,7 @@ function createEnvironment({ baseEnvironment } = {}) {
 
   return class SentryEnvironment extends BaseEnvironment {
     getVmContextSpanStack = [];
-    
+
     constructor(...args) {
       super(...args);
 
@@ -44,6 +44,7 @@ function createEnvironment({ baseEnvironment } = {}) {
         init.integrations.push(new ProfilingIntegration());
 
         this.Sentry.init(init);
+        this.Sentry.setTags(this.options.tags || this.options.transactionOptions?.tags);
         DID_INIT_SENTRY = true
       }
 
@@ -67,7 +68,6 @@ function createEnvironment({ baseEnvironment } = {}) {
         op: "jest test suite",
         description: this.testPath,
         name: this.testPath,
-        tags: transactionOptions.tags,
       });
       this.global.transaction = this.transaction;
       this.global.Sentry = this.Sentry;
@@ -277,7 +277,6 @@ function createEnvironment({ baseEnvironment } = {}) {
             // attach the trace id and span id of parent transaction so they're part of the same trace
             parentSpanId: span[0].spanId,
             traceId: span[0].transaction.traceId,
-            tags: this.options.transactionOptions?.tags,
           })
           spans.push(testTransaction);
 
