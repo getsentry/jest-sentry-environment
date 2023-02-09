@@ -1,3 +1,12 @@
+## 4.0.0-alpha.2
+
+### Various fixes & improvements
+
+- Switch to using setTags (#20) by @mattgauntseo-sentry
+- Add tags to exceptions (#20) by @mattgauntseo-sentry
+- feat(sentry-environment): handle nested describe blocks (#19) by @JonasBa
+- deps(profiling): bump 0.0.5 (#18) by @JonasBa
+
 ## 4.0.0-alpha
 
 ### Various fixes & improvements
