@@ -1,5 +1,4 @@
 const Sentry = require("@sentry/node");
-require("@sentry/tracing");
 const {ProfilingIntegration} = require("@sentry/profiling-node");
 
 let DID_INIT_SENTRY = false;
@@ -9,7 +8,7 @@ function isNotTransaction(span) {
 }
 
 function createEnvironment({ baseEnvironment } = {}) {
-  const BaseEnvironment = baseEnvironment || require("jest-environment-jsdom");
+  const BaseEnvironment = baseEnvironment?.TestEnvironment || require("jest-environment-jsdom").TestEnvironment;
 
   return class SentryEnvironment extends BaseEnvironment {
     getVmContextSpanStack = [];
@@ -38,6 +37,10 @@ function createEnvironment({ baseEnvironment } = {}) {
         // Ensure integration is an array as init is a user input
         if(!Array.isArray(init.integrations)) {
           init.integrations = [];
+        }
+
+        if (Sentry.autoDiscoverNodePerformanceMonitoringIntegrations) {
+          integrations.push(...Sentry.autoDiscoverNodePerformanceMonitoringIntegrations())
         }
 
         // Add profiling integration
