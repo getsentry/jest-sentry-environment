@@ -1,3 +1,13 @@
+## 6.0.0
+
+### Various fixes & improvements
+
+- fix span status (#24) by @scttcper
+- lockfile (#24) by @scttcper
+- capture exception on the right span (#24) by @scttcper
+- formatting, sentry v8 peer dep (#24) by @scttcper
+- feat: Support sentry sdk v8 (#24) by @scttcper
+
 ## 5.0.1
 
 - No documented changes.
