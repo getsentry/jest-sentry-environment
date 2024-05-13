@@ -1,5 +1,5 @@
 const Sentry = require("@sentry/node");
-const {ProfilingIntegration} = require("@sentry/profiling-node");
+const {nodeProfilingIntegration} = require("@sentry/profiling-node");
 
 let DID_INIT_SENTRY = false;
 
@@ -44,7 +44,7 @@ function createEnvironment({ baseEnvironment } = {}) {
         }
 
         // Add profiling integration
-        init.integrations.push(new ProfilingIntegration());
+        init.integrations.push(nodeProfilingIntegration());
 
         this.Sentry.init(init);
         this.Sentry.setTags(this.options.tags || this.options.transactionOptions?.tags);
@@ -65,24 +65,23 @@ function createEnvironment({ baseEnvironment } = {}) {
         return;
       }
 
-      const { transactionOptions } = this.options;
-
-      this.transaction = this.Sentry.startTransaction({
+      this.transaction = this.Sentry.startInactiveSpan({
         op: "jest test suite",
         description: this.testPath,
         name: this.testPath,
+        forceTransaction: true,
       });
       this.global.transaction = this.transaction;
       this.global.Sentry = this.Sentry;
 
-      this.Sentry.configureScope((scope) => scope.setSpan(this.transaction));
-
-      const span = this.transaction.startChild({
-        op: "setup",
-        description: this.testPath,
+      this.Sentry.withActiveSpan(this.transaction, () => {
+        this.Sentry.startSpan({
+          op: "setup",
+          description: this.testPath,
+          }, async () => {
+          await super.setup();
+        });
       });
-      await super.setup();
-      span.finish();
     }
 
     async teardown() {
@@ -91,29 +90,33 @@ function createEnvironment({ baseEnvironment } = {}) {
         return;
       }
 
-      const span = this.transaction.startChild({
-        op: "teardown",
-        description: this.testPath,
+      this.Sentry.withActiveSpan(this.transaction, () => {
+        this.Sentry.startSpan({
+          op: "teardown",
+          description: this.testPath,
+          }, async () => {
+          await super.teardown();
+          if (this.transaction) {
+            this.transaction.end();
+          }
+          this.runDescribe = null;
+          this.testContainers = null;
+          this.tests = null;
+          this.hooks = null;
+          this.hub = null;
+          this.Sentry = null;
+        });
       });
-      await super.teardown();
-      span.finish();
-      if (this.transaction) {
-        this.transaction.finish();
-      }
-      this.runDescribe = null;
-      this.testContainers = null;
-      this.tests = null;
-      this.hooks = null;
-      this.hub = null;
-      this.Sentry = null;
     }
 
     getVmContext() {
       if (this.transaction) {
-        const getVmContextSpan = this.transaction.startChild({
-          op: "getVmContext",
-        })
-        this.getVmContextSpanStack.push(getVmContextSpan);
+        this.Sentry.withActiveSpan(this.transaction, () => {
+          const getVmContextSpan = this.Sentry.startInactiveSpan({
+            op: "getVmContext",
+          });
+          this.getVmContextSpanStack.push(getVmContextSpan);
+        });
       }
       return super.getVmContext();
     }
@@ -139,7 +142,7 @@ function createEnvironment({ baseEnvironment } = {}) {
           if (name === "run_describe_finish") {
             const span = this.getVmContextSpanStack.pop();
             if(span){
-              span.finish();
+              span.end();
             }
           }
 
@@ -256,35 +259,19 @@ function createEnvironment({ baseEnvironment } = {}) {
         }
 
         const spans = [];
-        const parentName = parentObj && this.getName(parentObj);
         const spanProps = { op, description: description || testName };
-        const span =
-          parentObj && parentStore.has(parentName)
-            ? Array.isArray(parentStore.get(parentName))
-              ? parentStore
-                  .get(parentName)
-                  .map((s) =>
-                    s.startChild(spanProps))
-              : [parentStore.get(parentName).startChild(spanProps)]
-            : [this.transaction.startChild(spanProps)];
-
-        spans.push(...span);
 
         // If we are starting a test, let's also make it a transaction so we can see our slowest tests
         if (spanProps.op === "test") {
-          const testTransaction = this.Sentry.startTransaction({
-            ...spanProps,
-            op: "jest test",
-            name: spanProps.description,
-            description: null,
-            // attach the trace id and span id of parent transaction so they're part of the same trace
-            parentSpanId: span[0].spanId,
-            traceId: span[0].transaction.traceId,
+          this.Sentry.withActiveSpan(this.transaction, () => {
+            const testTransaction = this.Sentry.startInactiveSpan({
+              ...spanProps,
+              op: "jest test",
+              name: spanProps.description,
+              description: null,
+            })
+            spans.push(testTransaction);
           })
-          spans.push(testTransaction);
-
-          // ensure that the test transaction is on the scope while it's happening
-          this.Sentry.configureScope((scope) => scope.setSpan(testTransaction));
         }
 
         dataStore.set(testName, spans);
@@ -297,7 +284,9 @@ function createEnvironment({ baseEnvironment } = {}) {
 
         if (name.includes("failure")) {
           if (event.error) {
-            this.Sentry.captureException(event.error);
+            this.Sentry.withActiveSpan(this.transaction, () => {
+              this.Sentry.captureException(event.error);
+            });
           }
         }
 
@@ -309,13 +298,7 @@ function createEnvironment({ baseEnvironment } = {}) {
             }
           }
 
-          span.finish();
-
-          // if this is finishing a jest test span, then put the test suite transaction
-          // back on the scope
-          if (span.op === "jest test") {
-            this.Sentry.configureScope((scope) => scope.setSpan(this.transaction));
-          }
+          span.end();
         });
       }
     }
