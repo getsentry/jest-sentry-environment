@@ -173,8 +173,13 @@ function createEnvironment({baseEnvironment} = {}) {
             parentObj: event.test.parent,
             dataStore: this.testContainers,
             parentStore: this.runDescribe,
+            /**
+             * @param {Sentry.Span} span
+             * @returns {Sentry.Span}
+             */
             beforeFinish: span => {
-              span.setStatus(!event.test.errors.length ? 'ok' : 'internal_error');
+              const isOkay = !event.test.errors.length;
+              span.setStatus({code: isOkay ? 1 : 2, message: isOkay ? 'ok' : 'internal_error'});
               return span;
             },
           };
@@ -188,8 +193,13 @@ function createEnvironment({baseEnvironment} = {}) {
             parentObj: event.test,
             dataStore: this.tests,
             parentStore: this.testContainers,
+            /**
+             * @param {Sentry.Span} span
+             * @returns {Sentry.Span}
+             */
             beforeFinish: span => {
-              span.setStatus(!event.test.errors.length ? 'ok' : 'internal_error');
+              const isOkay = !event.test.errors.length;
+              span.setStatus({code: isOkay ? 1 : 2, message: isOkay ? 'ok' : 'internal_error'});
               return span;
             },
           };
