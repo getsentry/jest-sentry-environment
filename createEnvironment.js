@@ -3,15 +3,14 @@ const {nodeProfilingIntegration} = require('@sentry/profiling-node');
 
 let DID_INIT_SENTRY = false;
 
-function isNotTransaction(span) {
-  return span.op !== 'jest test';
-}
-
 function createEnvironment({baseEnvironment} = {}) {
   const BaseEnvironment =
     baseEnvironment?.TestEnvironment || require('jest-environment-jsdom').TestEnvironment;
 
   return class SentryEnvironment extends BaseEnvironment {
+    /**
+     * @type {Sentry.Span[]}
+     */
     getVmContextSpanStack = [];
 
     constructor(...args) {
@@ -70,7 +69,6 @@ function createEnvironment({baseEnvironment} = {}) {
 
       this.transaction = this.Sentry.startInactiveSpan({
         op: 'jest test suite',
-        description: this.testPath,
         name: this.testPath,
         forceTransaction: true,
       });
@@ -81,7 +79,7 @@ function createEnvironment({baseEnvironment} = {}) {
         this.Sentry.startSpan(
           {
             op: 'setup',
-            description: this.testPath,
+            name: this.testPath,
           },
           async () => {
             await super.setup();
@@ -100,7 +98,7 @@ function createEnvironment({baseEnvironment} = {}) {
         this.Sentry.startSpan(
           {
             op: 'teardown',
-            description: this.testPath,
+            name: this.testPath,
           },
           async () => {
             await super.teardown();
@@ -130,6 +128,9 @@ function createEnvironment({baseEnvironment} = {}) {
       return super.getVmContext();
     }
 
+    /**
+     * @returns {string}
+     */
     getName(parent) {
       if (!parent) {
         return '';
@@ -141,7 +142,7 @@ function createEnvironment({baseEnvironment} = {}) {
       }
 
       const parentName = this.getName(parent.parent);
-      return `${parentName ? `${parentName} >` : ''} ${parent.name}`;
+      return `${parentName ? `${parentName} >` : ''} ${parent.name}`.trim();
     }
 
     getData({name, ...event}) {
@@ -163,6 +164,7 @@ function createEnvironment({baseEnvironment} = {}) {
             parentStore: this.runDescribe,
           };
 
+        case 'test_started':
         case 'test_start':
         case 'test_done':
           return {
@@ -203,18 +205,9 @@ function createEnvironment({baseEnvironment} = {}) {
         case 'hook_failure':
           return {
             obj: event.hook.parent,
-            parentObj: event.test && event.test.parent,
+            parentObj: event.test?.parent,
             dataStore: this.hooks,
             parentStore: this.testContainers,
-            beforeFinish: span => {
-              const parent = this.testContainers.get(this.getName(event.test));
-              if (parent && !Array.isArray(parent)) {
-                return parent.startChild(span);
-              } else if (Array.isArray(parent)) {
-                return parent.find(isNotTransaction).startChild(span);
-              }
-              return span;
-            },
           };
 
         case 'start_describe_definition':
@@ -256,8 +249,36 @@ function createEnvironment({baseEnvironment} = {}) {
           return;
         }
 
+        /**
+         * @type {Sentry.Span[]}
+         */
         const spans = [];
-        const spanProps = {op, description: description || testName};
+        const parentName = parentObj && this.getName(parentObj);
+        /**
+         * @type {Parameters<Sentry.startSpan>[0]}
+         */
+        const spanProps = {op, name: description || testName};
+        if (parentObj && parentStore.has(parentName)) {
+          if (Array.isArray(parentStore.get(parentName))) {
+            parentStore.get(parentName).forEach(s => {
+              this.Sentry.withActiveSpan(s, () => {
+                spans.push(this.Sentry.startInactiveSpan(spanProps));
+              });
+            });
+          } else {
+            const parentSpan = parentStore.get(parentName);
+            this.Sentry.withActiveSpan(parentSpan, () => {
+              spans.push(this.Sentry.startInactiveSpan(spanProps));
+            });
+          }
+        } else {
+          // By not doing starting a span here we're ignoring beforeEach afterEach spans
+          // Not currently sure how to attach to them to their test spans
+          // They end up dangling on the parent and making a mess
+          // this.Sentry.withActiveSpan(this.transaction, () => {
+          //   spans.push(this.Sentry.startInactiveSpan(spanProps));
+          // });
+        }
 
         // If we are starting a test, let's also make it a transaction so we can see our slowest tests
         if (spanProps.op === 'test') {
@@ -265,8 +286,7 @@ function createEnvironment({baseEnvironment} = {}) {
             const testTransaction = this.Sentry.startInactiveSpan({
               ...spanProps,
               op: 'jest test',
-              name: spanProps.description,
-              description: null,
+              forceTransaction: true,
             });
             spans.push(testTransaction);
           });
@@ -278,14 +298,15 @@ function createEnvironment({baseEnvironment} = {}) {
       }
 
       if (dataStore.has(testName)) {
+        /**
+         * @type {Sentry.Span[]}
+         */
         const spans = dataStore.get(testName);
 
-        if (name.includes('failure')) {
-          if (event.error) {
-            this.Sentry.withActiveSpan(this.transaction, () => {
-              this.Sentry.captureException(event.error);
-            });
-          }
+        if (name.includes('failure') && event.error) {
+          this.Sentry.withActiveSpan(spans[0], () => {
+            this.Sentry.captureException(event.error);
+          });
         }
 
         spans.forEach(span => {

@@ -17,7 +17,7 @@ Then, in your jest configuration file, e.g. `jest.config.js` you will need to sp
 
 ```javascript
 {
-  testEnvironment: 'jest-sentry-environment/jsdom', // or `jest-sentry-environment/node` for node environment
+  testEnvironment: '@sentry/jest-environment/jsdom', // or `@sentry/jest-environment/node` for node environment
   testEnvironmentOptions: {
     sentryConfig: {
       // `init` will be passed to `Sentry.init()`
