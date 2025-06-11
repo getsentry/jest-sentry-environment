@@ -1,3 +1,11 @@
+## 6.1.0
+
+### Various fixes & improvements
+
+- build: update github actions (#27) by @scttcper
+- feat: make jsdom available on global (#26) by @scttcper
+- Replace release bot with GH app (#25) by @Jeffreyhung
+
 ## 6.0.0
 
 ### Various fixes & improvements
