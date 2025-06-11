@@ -67,6 +67,11 @@ function createEnvironment({baseEnvironment} = {}) {
         return;
       }
 
+      // Make jsdom available to the test environment
+      if (!this.global.jsdom) {
+        this.global.jsdom = this.dom;
+      }
+
       this.transaction = this.Sentry.startInactiveSpan({
         op: 'jest test suite',
         name: this.testPath,
@@ -89,6 +94,10 @@ function createEnvironment({baseEnvironment} = {}) {
     }
 
     async teardown() {
+      if (this.global.jsdom) {
+        this.global.jsdom = undefined;
+      }
+
       if (!this.Sentry || !this.transaction) {
         await super.teardown();
         return;
