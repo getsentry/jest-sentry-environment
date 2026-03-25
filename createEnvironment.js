@@ -18,7 +18,7 @@ function createEnvironment({baseEnvironment} = {}) {
 
       const [config, context] = args;
 
-      this.options = config.projectConfig.testEnvironmentOptions?.sentryConfig;
+      this.options = structuredClone(config.projectConfig.testEnvironmentOptions?.sentryConfig)
 
       if (
         !this.options ||
