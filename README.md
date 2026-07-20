@@ -1,59 +1,72 @@
-# jest-sentry-environment
+# Jest Sentry Environment
 
-Adds Sentry performance monitoring to your jest test suites to find your slowest tests.
+Adds Sentry performance monitoring to your Jest test suites to find your slowest tests.
 
 ![Sentry Example](/docs/example.png)
 
-
 ## Installation
 
-First, you will need to add the `jest-sentry-environment` package to your application, as well as the Sentry SDKs.
+This package requires Node.js 24 or newer, Jest 30 or newer, and `@sentry/node` 10 or
+newer.
+
+Install the environment, the Sentry Node SDK, and the Jest environment you use. For
+jsdom:
 
 ```bash
-npm install @sentry/node @sentry/tracing @sentry/profiling-node jest-sentry-environment
+npm install --save-dev @sentry/jest-environment @sentry/node jest jest-environment-jsdom
 ```
 
-Then, in your jest configuration file, e.g. `jest.config.js` you will need to specify the path to the environment as well as some options. 
+For the Node environment, install `jest-environment-node` instead of
+`jest-environment-jsdom`.
+
+Then configure the environment and Sentry options in `jest.config.js`:
 
 ```javascript
-{
-  testEnvironment: '@sentry/jest-environment/jsdom', // or `@sentry/jest-environment/node` for node environment
+module.exports = {
+  // Use '@sentry/jest-environment/node' for the Node environment.
+  testEnvironment: '@sentry/jest-environment/jsdom',
   testEnvironmentOptions: {
     sentryConfig: {
       // `init` will be passed to `Sentry.init()`
       init: {
-        dsn: '<your DSN here>'
+        dsn: '<your DSN here>',
         environment: !!process.env.CI ? 'ci' : 'local',
         tracesSampleRate: 1,
-        profilesSampleRate: 1
       },
 
-      transactionOptions: {
-        // `tags` will be used for the test suite transaction
-        tags: {
-          branch: process.env.GITHUB_REF,
-          commit: process.env.GITHUB_SHA,
-        },
+      tags: {
+        branch: process.env.GITHUB_REF,
+        commit: process.env.GITHUB_SHA,
       },
+
+      // Successful hooks faster than this are omitted. Failed hooks are always recorded.
+      minHookDurationMs: 5,
     },
   },
-}
+};
 ```
+
+Set `init.dsn` to `false` to disable instrumentation without loading the Sentry SDK,
+for example `dsn: process.env.SENTRY_DSN || false`.
+
+Each test suite is recorded as a transaction. Executed tests are also recorded as
+individually searchable transactions, with their hooks and test functions organized as
+child spans. CPU profiling is not included.
 
 You can either import the jsdom or node environments. You can also customize the base environment by specifying your own `testEnvironment`.
 
-```json
-testEnvironment: './path/to/env.js',
+```javascript
+module.exports = {
+  testEnvironment: './path/to/env.js',
+};
 ```
 
 In `./path/to/env.js`:
 
 ```javascript
-const {createEnvironment} = require('jest-sentry-environment');
+const {createEnvironment} = require('@sentry/jest-environment');
 
-return createEnvironment({
+module.exports = createEnvironment({
   baseEnvironment: require('jest-environment-node'),
 });
 ```
-
-

@@ -1,18 +1,27 @@
 {
   "name": "@sentry/jest-environment",
   "version": "6.1.0",
-  "description": "Automatic performance and profiling instrumentation for your jest tests.",
+  "description": "Automatic performance instrumentation for your Jest tests.",
+  "engines": {
+    "node": ">=24"
+  },
+  "main": "index.js",
   "scripts": {
-    "test": "npm test"
+    "format": "prettier --write .",
+    "format-check": "prettier --check .",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:integration": "jest --runInBand --no-watchman --config jest.config.js",
+    "test:unit": "node --test"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/billyvg/jest-sentry-environment.git"
+    "url": "git+https://github.com/getsentry/jest-sentry-environment.git"
   },
   "files": [
     "package.json",
     "README.md",
     "LICENSE",
+    "index.js",
     "node.js",
     "jsdom.js",
     "createEnvironment.js"
@@ -23,22 +32,32 @@
     "test",
     "testing",
     "performance",
-    "profiling",
     "tracing"
   ],
   "author": "Billy Vong <github@mmo.me>",
   "license": "Apache-2.0",
   "bugs": {
-    "url": "https://github.com/billyvg/jest-sentry-environment/issues"
+    "url": "https://github.com/getsentry/jest-sentry-environment/issues"
   },
-  "homepage": "https://github.com/billyvg/jest-sentry-environment#readme",
+  "homepage": "https://github.com/getsentry/jest-sentry-environment#readme",
   "devDependencies": {
-    "prettier": "^2.3.2"
+    "jest-environment-jsdom": "^30.4.1",
+    "jest-environment-node": "^30.4.1",
+    "prettier": "^3.9.5"
   },
   "peerDependencies": {
-    "@sentry/node": ">=8",
-    "@sentry/profiling-node": ">=8",
-    "jest": ">=29"
+    "@sentry/node": ">=10",
+    "jest": ">=30",
+    "jest-environment-jsdom": ">=30",
+    "jest-environment-node": ">=30"
+  },
+  "peerDependenciesMeta": {
+    "jest-environment-jsdom": {
+      "optional": true
+    },
+    "jest-environment-node": {
+      "optional": true
+    }
   },
   "prettier": {
     "bracketSpacing": false,
