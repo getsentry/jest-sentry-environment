@@ -1,3 +1,9 @@
+## 7.0.0
+
+### Internal Changes 🔧
+
+- (jest) Modernize Sentry test environment by @scttcper in [#30](https://github.com/getsentry/jest-sentry-environment/pull/30)
+
 ## 6.1.0
 
 ### Various fixes & improvements
