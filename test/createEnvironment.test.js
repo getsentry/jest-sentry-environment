@@ -283,59 +283,6 @@ test('records the Jest lifecycle without duplicate or leaked spans', async () =>
   });
 });
 
-test('parents shared hooks when concurrent tests finish out of order', async () => {
-  const {calls, Sentry} = makeSentry();
-  await withMockedSentry(Sentry, async createEnvironment => {
-    const environment = makeEnvironment(createEnvironment, {
-      init: {dsn: 'https://public@example.com/1'},
-    });
-    await environment.setup();
-
-    const root = {name: 'ROOT_DESCRIBE_BLOCK'};
-    const describeBlock = {name: 'suite', parent: root};
-    const hook = {parent: describeBlock, type: 'beforeEach'};
-    const releases = new Map();
-    const testSpans = new Map();
-    const send = event => environment.handleTestEvent(event);
-
-    send({describeBlock: root, name: 'run_describe_start'});
-    send({describeBlock, name: 'run_describe_start'});
-
-    const runHook = async testEntry => {
-      send({name: 'test_started', test: testEntry});
-      testSpans.set(testEntry, calls.spans.at(-1));
-      send({hook, name: 'hook_start'});
-      await new Promise(resolve => releases.set(testEntry, resolve));
-      send({hook, name: 'hook_success', test: testEntry});
-      send({name: 'test_done', test: testEntry});
-    };
-    const testA = makeTest('first', describeBlock, {concurrent: true});
-    const testB = makeTest('second', describeBlock, {concurrent: true});
-    const runA = runHook(testA);
-    const runB = runHook(testB);
-
-    assert.equal(environment.hookStarts.get(hook).length, 2);
-    for (const hookStart of environment.hookStarts.get(hook)) {
-      hookStart.startTime -= 0.01;
-    }
-    releases.get(testB)();
-    await runB;
-    releases.get(testA)();
-    await runA;
-
-    const hookSpans = calls.spans.filter(span => span.options.op === 'beforeEach');
-    assert.deepEqual(
-      hookSpans.map(span => span.parent),
-      [testSpans.get(testB), testSpans.get(testA)]
-    );
-    assert.equal(environment.hookStarts.size, 0);
-
-    send({describeBlock, name: 'run_describe_finish'});
-    send({describeBlock: root, name: 'run_describe_finish'});
-    await environment.teardown();
-  });
-});
-
 test('cleans up unfinished spans when teardown fails', async () => {
   const {calls, Sentry} = makeSentry();
   class ThrowingEnvironment extends FakeEnvironment {

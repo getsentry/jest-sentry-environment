@@ -269,25 +269,15 @@ function createEnvironment({baseEnvironment = require('jest-environment-jsdom')}
             startTime: timestampInSeconds(),
             timeout: hook.timeout ?? state?.testTimeout,
           };
-          const starts = this.hookStarts.get(hook);
-          if (Array.isArray(starts)) {
-            starts.push(hookStart);
-          } else if (starts) {
-            this.hookStarts.set(hook, [starts, hookStart]);
-          } else {
-            this.hookStarts.set(hook, hookStart);
-          }
+          this.hookStarts.set(hook, hookStart);
           return;
         }
 
         case 'hook_success':
         case 'hook_failure': {
           const {hook} = event;
-          const starts = this.hookStarts.get(hook);
-          const hookStart = Array.isArray(starts) ? starts.shift() : starts;
-          if (!Array.isArray(starts) || starts.length === 0) {
-            this.hookStarts.delete(hook);
-          }
+          const hookStart = this.hookStarts.get(hook);
+          this.hookStarts.delete(hook);
           const endTime = timestampInSeconds();
           if (
             event.name === 'hook_success' &&
