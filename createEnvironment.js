@@ -1,11 +1,35 @@
-let DID_INIT_SENTRY = false;
-let Sentry;
+let sentryModule;
+
+const SPAN_STATUS_OK = {code: 1, message: 'ok'};
+const SPAN_STATUS_ERROR = {code: 2, message: 'internal_error'};
+const ROOT_DESCRIBE_BLOCK = 'ROOT_DESCRIBE_BLOCK';
+const DEFAULT_MIN_HOOK_DURATION_MS = 5;
 
 const timestampInSeconds = () => (performance.timeOrigin + performance.now()) / 1_000;
 
 function loadSentry() {
-  Sentry ??= require('@sentry/node');
-  return Sentry;
+  sentryModule ??= require('@sentry/node');
+  return sentryModule;
+}
+
+function isWatchMode() {
+  return process.argv.includes('--watch') || process.argv.includes('--watchAll');
+}
+
+function getFullName(entry) {
+  const names = [];
+  for (
+    let current = entry;
+    current && current.name !== ROOT_DESCRIBE_BLOCK;
+    current = current.parent
+  ) {
+    names.push(current.name);
+  }
+  return names.reverse().join(' > ');
+}
+
+function getTimeoutAttribute(timeout) {
+  return timeout == null ? {} : {'test.timeout_ms': timeout};
 }
 
 function createEnvironment({baseEnvironment = require('jest-environment-jsdom')} = {}) {
@@ -17,31 +41,37 @@ function createEnvironment({baseEnvironment = require('jest-environment-jsdom')}
 
       const [config, context] = args;
 
-      this.options = config.projectConfig.testEnvironmentOptions.sentryConfig;
+      const options = config.projectConfig.testEnvironmentOptions.sentryConfig;
 
       if (
-        !this.options ||
-        this.options.init?.dsn === false ||
-        // Do not include in watch mode... unfortunately, I don't think there's
-        // a better watch to detect when jest is in watch mode
-        process.argv.includes('--watch') ||
-        process.argv.includes('--watchAll')
+        !options ||
+        options.init?.dsn === false ||
+        // Jest does not expose watch mode to test environments directly.
+        isWatchMode()
       ) {
         return;
       }
 
-      const {init = {}} = this.options;
+      const {init = {}, minHookDurationMs = DEFAULT_MIN_HOOK_DURATION_MS, tags} = options;
 
-      this.Sentry = loadSentry();
-      if (!DID_INIT_SENTRY) {
-        this.Sentry.init(init);
-        if (this.options.tags) {
-          this.Sentry.setTags(this.options.tags);
+      this.sentry = loadSentry();
+      if (!this.sentry.isInitialized()) {
+        this.sentry.init(init);
+        if (tags) {
+          this.sentry.setTags(tags);
         }
-        DID_INIT_SENTRY = true;
       }
 
-      this.testPath = context.testPath.replace(process.cwd(), '');
+      const {relative, sep} = require('node:path');
+      this.testPath = relative(process.cwd(), context.testPath).replaceAll(sep, '/');
+      this.minHookDurationSeconds = minHookDurationMs / 1_000;
+      this.baseAttributes = {
+        'test.file': this.testPath,
+        'test.framework': 'jest',
+        ...(process.env.JEST_WORKER_ID
+          ? {'test.worker_id': process.env.JEST_WORKER_ID}
+          : {}),
+      };
 
       this.describeSpans = new Map();
       this.testSpans = new Map();
@@ -59,104 +89,88 @@ function createEnvironment({baseEnvironment = require('jest-environment-jsdom')}
         }
       };
 
-      if (!this.Sentry) {
+      if (!this.sentry) {
         await setupEnvironment();
         return;
       }
 
-      this.transaction = this.Sentry.startInactiveSpan({
-        op: 'jest test suite',
-        name: this.testPath,
-        forceTransaction: true,
-      });
-      this.global.transaction = this.transaction;
-      this.global.Sentry = this.Sentry;
-
-      await this.Sentry.withActiveSpan(this.transaction, () =>
-        this.Sentry.startSpan(
-          {
-            op: 'setup',
-            name: this.testPath,
-          },
-          setupEnvironment
-        )
+      this.suiteSpan = this.sentry.startNewTrace(() =>
+        this.sentry.startInactiveSpan({
+          op: 'jest test suite',
+          name: this.testPath,
+          forceTransaction: true,
+          attributes: this.baseAttributes,
+        })
       );
+      this.global.transaction = this.suiteSpan;
+      this.global.Sentry = this.sentry;
+
+      await this.runEnvironmentSpan('setup', setupEnvironment);
     }
 
     async teardown() {
       const teardownEnvironment = async () => {
         this.global.jsdom = undefined;
+        this.global.Sentry = undefined;
+        this.global.transaction = undefined;
         await super.teardown();
       };
 
       try {
-        if (!this.Sentry) {
+        if (!this.sentry) {
           await teardownEnvironment();
           return;
         }
 
         this.endOpenSpans();
-        await this.Sentry.withActiveSpan(this.transaction, () =>
-          this.Sentry.startSpan(
-            {
-              op: 'teardown',
-              name: this.testPath,
-            },
-            teardownEnvironment
-          )
-        );
+        await this.runEnvironmentSpan('teardown', teardownEnvironment);
       } finally {
-        if (this.Sentry) {
-          this.transaction.end();
-        }
+        this.suiteSpan?.end();
         this.describeSpans = null;
         this.testSpans = null;
         this.testFunctionSpans = null;
         this.hookStarts = null;
         this.openSpans = null;
-        this.hub = null;
-        this.Sentry = null;
+        this.baseAttributes = null;
+        this.minHookDurationSeconds = null;
+        this.testPath = null;
+        this.suiteSpan = null;
+        this.sentry = null;
       }
     }
 
-    /**
-     * @returns {string}
-     */
-    getName(parent) {
-      // Ignore these for now as it adds a level of nesting and I'm not quite sure where it's even coming from
-      if (parent.name === 'ROOT_DESCRIBE_BLOCK') {
-        return '';
-      }
-
-      const parentName = this.getName(parent.parent);
-      return `${parentName ? `${parentName} >` : ''} ${parent.name}`.trim();
+    runEnvironmentSpan(op, callback) {
+      return this.sentry.startSpan(
+        {name: this.testPath, op, parentSpan: this.suiteSpan},
+        callback
+      );
     }
 
     startTrackedSpan(options, parentSpan) {
-      let span;
-      this.Sentry.withActiveSpan(parentSpan, () => {
-        span = this.Sentry.startInactiveSpan(options);
+      const span = this.sentry.startInactiveSpan({
+        ...options,
+        parentSpan,
       });
       this.openSpans.add(span);
       return span;
     }
 
-    endTrackedSpan(span, {endTime, error, isOkay} = {}) {
+    endTrackedSpan(span, {attributes, endTime, error, isOkay} = {}) {
       if (!span || !this.openSpans.has(span)) {
         return;
       }
 
       try {
+        if (attributes) {
+          span.setAttributes(attributes);
+        }
         if (error) {
-          this.Sentry.withActiveSpan(span, () => {
-            this.Sentry.captureException(error);
+          this.sentry.withActiveSpan(span, () => {
+            this.sentry.captureException(error);
           });
         }
         if (typeof isOkay === 'boolean') {
-          span.setStatus({
-            code: isOkay ? 1 : 2,
-            message: isOkay ? 'ok' : 'internal_error',
-          });
+          span.setStatus(isOkay ? SPAN_STATUS_OK : SPAN_STATUS_ERROR);
         }
       } finally {
         span.end(endTime);
@@ -170,21 +184,21 @@ function createEnvironment({baseEnvironment = require('jest-environment-jsdom')}
       }
     }
 
-    handleTestEvent(event) {
-      if (!this.Sentry) {
+    handleTestEvent(event, state) {
+      if (!this.sentry) {
         return;
       }
 
       switch (event.name) {
         case 'run_describe_start': {
           const {describeBlock} = event;
-          if (describeBlock.name === 'ROOT_DESCRIBE_BLOCK') {
-            this.describeSpans.set(describeBlock, this.transaction);
+          if (describeBlock.name === ROOT_DESCRIBE_BLOCK) {
+            this.describeSpans.set(describeBlock, this.suiteSpan);
             return;
           }
           const parentSpan = this.describeSpans.get(describeBlock.parent);
           const span = this.startTrackedSpan(
-            {name: this.getName(describeBlock), op: 'describe'},
+            {name: getFullName(describeBlock), op: 'describe'},
             parentSpan
           );
           this.describeSpans.set(describeBlock, span);
@@ -195,7 +209,7 @@ function createEnvironment({baseEnvironment = require('jest-environment-jsdom')}
           const {describeBlock} = event;
           const span = this.describeSpans.get(describeBlock);
           this.describeSpans.delete(describeBlock);
-          if (span !== this.transaction) {
+          if (span !== this.suiteSpan) {
             this.endTrackedSpan(span);
           }
           return;
@@ -207,8 +221,16 @@ function createEnvironment({baseEnvironment = require('jest-environment-jsdom')}
           const span = this.startTrackedSpan(
             {
               forceTransaction: true,
-              name: this.getName(test),
+              name: getFullName(test),
               op: 'jest test',
+              attributes: {
+                ...this.baseAttributes,
+                'test.concurrent': Boolean(test.concurrent),
+                'test.expected_failure': Boolean(test.failing),
+                'test.invocation': test.invocations ?? 1,
+                ...(test.mode ? {'test.mode': test.mode} : {}),
+                ...getTimeoutAttribute(test.timeout ?? state?.testTimeout),
+              },
             },
             parentSpan
           );
@@ -222,7 +244,7 @@ function createEnvironment({baseEnvironment = require('jest-environment-jsdom')}
             return;
           }
           const span = this.startTrackedSpan(
-            {name: this.getName(test), op: 'test-fn'},
+            {name: getFullName(test), op: 'test-fn'},
             this.testSpans.get(test)
           );
           this.testFunctionSpans.set(test, span);
@@ -243,14 +265,17 @@ function createEnvironment({baseEnvironment = require('jest-environment-jsdom')}
 
         case 'hook_start': {
           const {hook} = event;
-          const startTime = timestampInSeconds();
+          const hookStart = {
+            startTime: timestampInSeconds(),
+            timeout: hook.timeout ?? state?.testTimeout,
+          };
           const starts = this.hookStarts.get(hook);
-          if (starts === undefined) {
-            this.hookStarts.set(hook, startTime);
-          } else if (Array.isArray(starts)) {
-            starts.push(startTime);
+          if (Array.isArray(starts)) {
+            starts.push(hookStart);
+          } else if (starts) {
+            this.hookStarts.set(hook, [starts, hookStart]);
           } else {
-            this.hookStarts.set(hook, [starts, startTime]);
+            this.hookStarts.set(hook, hookStart);
           }
           return;
         }
@@ -259,24 +284,36 @@ function createEnvironment({baseEnvironment = require('jest-environment-jsdom')}
         case 'hook_failure': {
           const {hook} = event;
           const starts = this.hookStarts.get(hook);
-          const startTime = Array.isArray(starts) ? starts.shift() : starts;
+          const hookStart = Array.isArray(starts) ? starts.shift() : starts;
           if (!Array.isArray(starts) || starts.length === 0) {
             this.hookStarts.delete(hook);
+          }
+          const endTime = timestampInSeconds();
+          if (
+            event.name === 'hook_success' &&
+            hookStart &&
+            endTime - hookStart.startTime < this.minHookDurationSeconds
+          ) {
+            return;
           }
           const parentSpan = event.test
             ? this.testSpans.get(event.test)
             : this.describeSpans.get(hook.parent);
-          const parentName = this.getName(hook.parent);
+          const parentName = getFullName(hook.parent);
           const span = this.startTrackedSpan(
             {
               name: parentName ? `${parentName} > ${hook.type}` : hook.type,
               op: hook.type,
-              startTime,
+              startTime: hookStart?.startTime,
+              attributes: {
+                'test.hook.type': hook.type,
+                ...getTimeoutAttribute(hookStart?.timeout),
+              },
             },
             parentSpan
           );
           this.endTrackedSpan(span, {
-            endTime: timestampInSeconds(),
+            endTime,
             error: event.name === 'hook_failure' ? event.error : undefined,
             isOkay: event.name === 'hook_success',
           });
@@ -291,7 +328,14 @@ function createEnvironment({baseEnvironment = require('jest-environment-jsdom')}
 
           const testSpan = this.testSpans.get(test);
           this.testSpans.delete(test);
-          this.endTrackedSpan(testSpan, {isOkay: test.errors.length === 0});
+          const isOkay = test.errors.length === 0;
+          this.endTrackedSpan(testSpan, {
+            attributes: {
+              'test.assertion_count': test.numPassingAsserts ?? 0,
+              'test.status': isOkay ? 'passed' : 'failed',
+            },
+            isOkay,
+          });
           return;
         }
 

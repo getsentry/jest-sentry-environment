@@ -25,21 +25,40 @@ function makeConfig(sentryConfig) {
   };
 }
 
+function makeTest(name, parent, overrides = {}) {
+  return {
+    concurrent: false,
+    errors: [],
+    failing: false,
+    invocations: 1,
+    name,
+    numPassingAsserts: 0,
+    parent,
+    ...overrides,
+  };
+}
+
 function makeSentry() {
-  const calls = {captured: [], init: [], spans: [], tags: []};
+  const calls = {captured: [], init: [], newTraces: 0, spans: [], tags: []};
   let activeSpan;
+  let initialized = false;
   const Sentry = {
     init(options) {
+      initialized = true;
       calls.init.push(options);
+    },
+    isInitialized() {
+      return initialized;
     },
     setTags(tags) {
       calls.tags.push(tags);
     },
     startInactiveSpan(options) {
       const span = {
+        attributes: {...options.attributes},
         endCalls: 0,
         options,
-        parent: activeSpan,
+        parent: options.parentSpan ?? activeSpan,
         statuses: [],
         end() {
           this.endCalls += 1;
@@ -47,11 +66,18 @@ function makeSentry() {
         setStatus(status) {
           this.statuses.push(status);
         },
+        setAttributes(attributes) {
+          Object.assign(this.attributes, attributes);
+        },
       };
       calls.spans.push(span);
       return span;
     },
     startSpan(_options, callback) {
+      return callback();
+    },
+    startNewTrace(callback) {
+      calls.newTraces += 1;
       return callback();
     },
     withActiveSpan(span, callback) {
@@ -131,14 +157,21 @@ test('initializes Sentry without mutating its options', async () => {
       tags: {branch: 'example'},
     });
     await environment.setup();
+    assert.deepEqual(calls.spans[0].attributes, {
+      'test.file': 'example.test.js',
+      'test.framework': 'jest',
+    });
 
     assert.equal(getLoadCount(), 1);
     assert.deepEqual(calls.init, [init]);
     assert.deepEqual(calls.tags, [{branch: 'example'}]);
+    assert.equal(calls.newTraces, 1);
     assert.equal(environment.global.jsdom, environment.dom);
 
     await environment.teardown();
     assert.equal(calls.spans[0].endCalls, 1);
+    assert.equal(environment.global.Sentry, undefined);
+    assert.equal(environment.global.transaction, undefined);
   });
 });
 
@@ -158,8 +191,8 @@ test('records the Jest lifecycle without duplicate or leaked spans', async () =>
 
     const root = {name: 'ROOT_DESCRIBE_BLOCK'};
     const describeBlock = {name: 'suite', parent: root};
-    const testEntry = {errors: [], name: 'works', parent: describeBlock};
-    const send = event => environment.handleTestEvent(event);
+    const testEntry = makeTest('works', describeBlock);
+    const send = (event, state) => environment.handleTestEvent(event, state);
 
     send({describeBlock: root, name: 'run_describe_start'});
     send({describeBlock, name: 'run_describe_start'});
@@ -168,18 +201,36 @@ test('records the Jest lifecycle without duplicate or leaked spans', async () =>
 
     send({name: 'test_start', test: testEntry});
     assert.equal(calls.spans.length, 2);
-    send({name: 'test_started', test: testEntry});
+    send({name: 'test_started', test: testEntry}, {testTimeout: 5000});
     const testSpan = calls.spans.at(-1);
     assert.equal(testSpan.options.op, 'jest test');
     assert.equal(testSpan.parent, describeSpan);
+    assert.deepEqual(testSpan.attributes, {
+      'test.concurrent': false,
+      'test.expected_failure': false,
+      'test.file': 'example.test.js',
+      'test.framework': 'jest',
+      'test.invocation': 1,
+      'test.timeout_ms': 5000,
+    });
 
     const hook = {parent: describeBlock, type: 'beforeEach'};
-    send({hook, name: 'hook_start'});
+    send({hook, name: 'hook_start'}, {testTimeout: 5000});
     assert.equal(calls.spans.at(-1), testSpan);
+    environment.hookStarts.get(hook).startTime -= 0.01;
     send({hook, name: 'hook_success', test: testEntry});
     const hookSpan = calls.spans.at(-1);
     assert.equal(hookSpan.parent, testSpan);
     assert.equal(hookSpan.endCalls, 1);
+    assert.deepEqual(hookSpan.attributes, {
+      'test.hook.type': 'beforeEach',
+      'test.timeout_ms': 5000,
+    });
+
+    const spanCountBeforeFastHook = calls.spans.length;
+    send({hook, name: 'hook_start'});
+    send({hook, name: 'hook_success', test: testEntry});
+    assert.equal(calls.spans.length, spanCountBeforeFastHook);
 
     send({name: 'test_fn_start', test: testEntry});
     const functionSpan = calls.spans.at(-1);
@@ -190,15 +241,17 @@ test('records the Jest lifecycle without duplicate or leaked spans', async () =>
     assert.equal(functionSpan.parent, testSpan);
     assert.deepEqual(calls.captured, [{error, span: functionSpan}]);
     assert.equal(testSpan.endCalls, 1);
+    assert.equal(testSpan.attributes['test.assertion_count'], 0);
+    assert.equal(testSpan.attributes['test.status'], 'failed');
 
-    const skipped = {errors: [], name: 'skipped', parent: describeBlock};
+    const skipped = makeTest('skipped', describeBlock);
     const spanCount = calls.spans.length;
     send({name: 'test_start', test: skipped});
     send({name: 'test_skip', test: skipped});
     assert.equal(calls.spans.length, spanCount);
 
     const hookError = new Error('beforeEach failed');
-    const failed = {errors: [hookError], name: 'hook failure', parent: describeBlock};
+    const failed = makeTest('hook failure', describeBlock, {errors: [hookError]});
     send({name: 'test_started', test: failed});
     const failedTestSpan = calls.spans.at(-1);
     send({hook, name: 'hook_start'});
@@ -211,8 +264,8 @@ test('records the Jest lifecycle without duplicate or leaked spans', async () =>
     assert.deepEqual(calls.captured.at(-1), {error: hookError, span: failedHookSpan});
     assert.equal(failedTestSpan.endCalls, 1);
 
-    const duplicateA = {errors: [], name: 'duplicate', parent: describeBlock};
-    const duplicateB = {errors: [], name: 'duplicate', parent: describeBlock};
+    const duplicateA = makeTest('duplicate', describeBlock);
+    const duplicateB = makeTest('duplicate', describeBlock);
     send({name: 'test_started', test: duplicateA});
     send({name: 'test_started', test: duplicateB});
     const [spanA, spanB] = calls.spans.slice(-2);
@@ -226,6 +279,59 @@ test('records the Jest lifecycle without duplicate or leaked spans', async () =>
     assert.equal(environment.openSpans.size, 0);
     assert.equal(environment.testSpans.size, 0);
     assert.equal(environment.hookStarts.size, 0);
+    await environment.teardown();
+  });
+});
+
+test('parents shared hooks when concurrent tests finish out of order', async () => {
+  const {calls, Sentry} = makeSentry();
+  await withMockedSentry(Sentry, async createEnvironment => {
+    const environment = makeEnvironment(createEnvironment, {
+      init: {dsn: 'https://public@example.com/1'},
+    });
+    await environment.setup();
+
+    const root = {name: 'ROOT_DESCRIBE_BLOCK'};
+    const describeBlock = {name: 'suite', parent: root};
+    const hook = {parent: describeBlock, type: 'beforeEach'};
+    const releases = new Map();
+    const testSpans = new Map();
+    const send = event => environment.handleTestEvent(event);
+
+    send({describeBlock: root, name: 'run_describe_start'});
+    send({describeBlock, name: 'run_describe_start'});
+
+    const runHook = async testEntry => {
+      send({name: 'test_started', test: testEntry});
+      testSpans.set(testEntry, calls.spans.at(-1));
+      send({hook, name: 'hook_start'});
+      await new Promise(resolve => releases.set(testEntry, resolve));
+      send({hook, name: 'hook_success', test: testEntry});
+      send({name: 'test_done', test: testEntry});
+    };
+    const testA = makeTest('first', describeBlock, {concurrent: true});
+    const testB = makeTest('second', describeBlock, {concurrent: true});
+    const runA = runHook(testA);
+    const runB = runHook(testB);
+
+    assert.equal(environment.hookStarts.get(hook).length, 2);
+    for (const hookStart of environment.hookStarts.get(hook)) {
+      hookStart.startTime -= 0.01;
+    }
+    releases.get(testB)();
+    await runB;
+    releases.get(testA)();
+    await runA;
+
+    const hookSpans = calls.spans.filter(span => span.options.op === 'beforeEach');
+    assert.deepEqual(
+      hookSpans.map(span => span.parent),
+      [testSpans.get(testB), testSpans.get(testA)]
+    );
+    assert.equal(environment.hookStarts.size, 0);
+
+    send({describeBlock, name: 'run_describe_finish'});
+    send({describeBlock: root, name: 'run_describe_finish'});
     await environment.teardown();
   });
 });
@@ -248,7 +354,7 @@ test('cleans up unfinished spans when teardown fails', async () => {
 
     const root = {name: 'ROOT_DESCRIBE_BLOCK'};
     const describeBlock = {name: 'suite', parent: root};
-    const testEntry = {errors: [], name: 'unfinished', parent: describeBlock};
+    const testEntry = makeTest('unfinished', describeBlock);
     environment.handleTestEvent({describeBlock: root, name: 'run_describe_start'});
     environment.handleTestEvent({describeBlock, name: 'run_describe_start'});
     environment.handleTestEvent({name: 'test_started', test: testEntry});
@@ -266,7 +372,7 @@ test('cleans up unfinished spans when teardown fails', async () => {
     );
     assert.equal(environment.testSpans, null);
     assert.equal(environment.openSpans, null);
-    assert.equal(environment.Sentry, null);
+    assert.equal(environment.sentry, null);
   });
 });
 
@@ -276,6 +382,9 @@ test('does not retain state for large sequential suites', async () => {
   let endedSpans = 0;
   const Sentry = {
     init() {},
+    isInitialized() {
+      return false;
+    },
     setTags() {},
     startInactiveSpan() {
       createdSpans += 1;
@@ -284,9 +393,13 @@ test('does not retain state for large sequential suites', async () => {
           endedSpans += 1;
         },
         setStatus() {},
+        setAttributes() {},
       };
     },
     startSpan(_options, callback) {
+      return callback();
+    },
+    startNewTrace(callback) {
       return callback();
     },
     withActiveSpan(_span, callback) {
@@ -297,6 +410,7 @@ test('does not retain state for large sequential suites', async () => {
   await withMockedSentry(Sentry, async createEnvironment => {
     const environment = makeEnvironment(createEnvironment, {
       init: {dsn: 'https://public@example.com/1'},
+      minHookDurationMs: Number.MAX_SAFE_INTEGER,
     });
     await environment.setup();
     const root = {name: 'ROOT_DESCRIBE_BLOCK'};
@@ -308,7 +422,7 @@ test('does not retain state for large sequential suites', async () => {
     send({describeBlock, name: 'run_describe_start'});
 
     for (let i = 0; i < testCount; i += 1) {
-      const testEntry = {errors: [], name: `test ${i}`, parent: describeBlock};
+      const testEntry = makeTest(`test ${i}`, describeBlock);
       send({name: 'test_started', test: testEntry});
       send({hook: beforeEachHook, name: 'hook_start'});
       send({hook: beforeEachHook, name: 'hook_success', test: testEntry});
@@ -322,11 +436,11 @@ test('does not retain state for large sequential suites', async () => {
     assert.equal(environment.testSpans.size, 0);
     assert.equal(environment.testFunctionSpans.size, 0);
     assert.equal(environment.hookStarts.size, 0);
-    assert.equal(createdSpans, 2 + testCount * 4);
-    assert.equal(endedSpans, testCount * 4);
+    assert.equal(createdSpans, 2 + testCount * 2);
+    assert.equal(endedSpans, testCount * 2);
     send({describeBlock, name: 'run_describe_finish'});
     send({describeBlock: root, name: 'run_describe_finish'});
     await environment.teardown();
-    assert.equal(endedSpans, 2 + testCount * 4);
+    assert.equal(endedSpans, 2 + testCount * 2);
   });
 });

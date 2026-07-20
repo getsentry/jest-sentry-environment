@@ -6,7 +6,7 @@ Adds Sentry performance monitoring to your Jest test suites to find your slowest
 
 ## Installation
 
-This package requires Node.js 24 or newer, Jest 30 or newer, and `@sentry/node` 8 or
+This package requires Node.js 24 or newer, Jest 30 or newer, and `@sentry/node` 10 or
 newer.
 
 Install the environment, the Sentry Node SDK, and the Jest environment you use. For
@@ -38,6 +38,9 @@ module.exports = {
         branch: process.env.GITHUB_REF,
         commit: process.env.GITHUB_SHA,
       },
+
+      // Successful hooks faster than this are omitted. Failed hooks are always recorded.
+      minHookDurationMs: 5,
     },
   },
 };
