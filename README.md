@@ -4,16 +4,15 @@ Adds Sentry performance monitoring to your jest test suites to find your slowest
 
 ![Sentry Example](/docs/example.png)
 
-
 ## Installation
 
-First, you will need to add the `jest-sentry-environment` package to your application, as well as the Sentry SDKs.
+First, install the environment and the Sentry Node SDK.
 
 ```bash
-npm install @sentry/node @sentry/tracing @sentry/profiling-node jest-sentry-environment
+npm install @sentry/jest-environment @sentry/node
 ```
 
-Then, in your jest configuration file, e.g. `jest.config.js` you will need to specify the path to the environment as well as some options. 
+Then, in your jest configuration file, e.g. `jest.config.js` you will need to specify the path to the environment as well as some options.
 
 ```javascript
 {
@@ -22,18 +21,14 @@ Then, in your jest configuration file, e.g. `jest.config.js` you will need to sp
     sentryConfig: {
       // `init` will be passed to `Sentry.init()`
       init: {
-        dsn: '<your DSN here>'
+        dsn: '<your DSN here>',
         environment: !!process.env.CI ? 'ci' : 'local',
         tracesSampleRate: 1,
-        profilesSampleRate: 1
       },
 
-      transactionOptions: {
-        // `tags` will be used for the test suite transaction
-        tags: {
-          branch: process.env.GITHUB_REF,
-          commit: process.env.GITHUB_SHA,
-        },
+      tags: {
+        branch: process.env.GITHUB_REF,
+        commit: process.env.GITHUB_SHA,
       },
     },
   },
@@ -49,11 +44,9 @@ testEnvironment: './path/to/env.js',
 In `./path/to/env.js`:
 
 ```javascript
-const {createEnvironment} = require('jest-sentry-environment');
+const {createEnvironment} = require('@sentry/jest-environment');
 
-return createEnvironment({
+module.exports = createEnvironment({
   baseEnvironment: require('jest-environment-node'),
 });
 ```
-
-

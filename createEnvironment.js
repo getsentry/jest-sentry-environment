@@ -1,27 +1,27 @@
-const Sentry = require('@sentry/node');
-const {nodeProfilingIntegration} = require('@sentry/profiling-node');
-
 let DID_INIT_SENTRY = false;
+let Sentry;
 
-function createEnvironment({baseEnvironment} = {}) {
-  const BaseEnvironment =
-    baseEnvironment?.TestEnvironment || require('jest-environment-jsdom').TestEnvironment;
+const timestampInSeconds = () => (performance.timeOrigin + performance.now()) / 1_000;
+
+function loadSentry() {
+  Sentry ??= require('@sentry/node');
+  return Sentry;
+}
+
+function createEnvironment({baseEnvironment = require('jest-environment-jsdom')} = {}) {
+  const {TestEnvironment: BaseEnvironment} = baseEnvironment;
 
   return class SentryEnvironment extends BaseEnvironment {
-    /**
-     * @type {Sentry.Span[]}
-     */
-    getVmContextSpanStack = [];
-
     constructor(...args) {
       super(...args);
 
       const [config, context] = args;
 
-      this.options = config.projectConfig.testEnvironmentOptions?.sentryConfig;
+      this.options = config.projectConfig.testEnvironmentOptions.sentryConfig;
 
       if (
         !this.options ||
+        this.options.init?.dsn === false ||
         // Do not include in watch mode... unfortunately, I don't think there's
         // a better watch to detect when jest is in watch mode
         process.argv.includes('--watch') ||
@@ -30,46 +30,38 @@ function createEnvironment({baseEnvironment} = {}) {
         return;
       }
 
-      const {init} = this.options;
+      const {init = {}} = this.options;
 
-      this.Sentry = Sentry;
+      this.Sentry = loadSentry();
       if (!DID_INIT_SENTRY) {
-        // Ensure integration is an array as init is a user input
-        if (!Array.isArray(init.integrations)) {
-          init.integrations = [];
-        }
-
-        if (Sentry.autoDiscoverNodePerformanceMonitoringIntegrations) {
-          integrations.push(
-            ...Sentry.autoDiscoverNodePerformanceMonitoringIntegrations()
-          );
-        }
-
-        // Add profiling integration
-        init.integrations.push(nodeProfilingIntegration());
-
         this.Sentry.init(init);
-        this.Sentry.setTags(this.options.tags || this.options.transactionOptions?.tags);
+        if (this.options.tags) {
+          this.Sentry.setTags(this.options.tags);
+        }
         DID_INIT_SENTRY = true;
       }
 
       this.testPath = context.testPath.replace(process.cwd(), '');
 
-      this.runDescribe = new Map();
-      this.testContainers = new Map();
-      this.tests = new Map();
-      this.hooks = new Map();
+      this.describeSpans = new Map();
+      this.testSpans = new Map();
+      this.testFunctionSpans = new Map();
+      this.hookStarts = new Map();
+      this.openSpans = new Set();
     }
 
     async setup() {
-      if (!this.Sentry || !this.options) {
+      const setupEnvironment = async () => {
         await super.setup();
-        return;
-      }
 
-      // Make jsdom available to the test environment
-      if (!this.global.jsdom) {
-        this.global.jsdom = this.dom;
+        if (this.dom && !this.global.jsdom) {
+          this.global.jsdom = this.dom;
+        }
+      };
+
+      if (!this.Sentry) {
+        await setupEnvironment();
+        return;
       }
 
       this.transaction = this.Sentry.startInactiveSpan({
@@ -80,71 +72,57 @@ function createEnvironment({baseEnvironment} = {}) {
       this.global.transaction = this.transaction;
       this.global.Sentry = this.Sentry;
 
-      this.Sentry.withActiveSpan(this.transaction, () => {
+      await this.Sentry.withActiveSpan(this.transaction, () =>
         this.Sentry.startSpan(
           {
             op: 'setup',
             name: this.testPath,
           },
-          async () => {
-            await super.setup();
-          }
-        );
-      });
+          setupEnvironment
+        )
+      );
     }
 
     async teardown() {
-      if (this.global.jsdom) {
+      const teardownEnvironment = async () => {
         this.global.jsdom = undefined;
-      }
-
-      if (!this.Sentry || !this.transaction) {
         await super.teardown();
-        return;
-      }
+      };
 
-      this.Sentry.withActiveSpan(this.transaction, () => {
-        this.Sentry.startSpan(
-          {
-            op: 'teardown',
-            name: this.testPath,
-          },
-          async () => {
-            await super.teardown();
-            if (this.transaction) {
-              this.transaction.end();
-            }
-            this.runDescribe = null;
-            this.testContainers = null;
-            this.tests = null;
-            this.hooks = null;
-            this.hub = null;
-            this.Sentry = null;
-          }
+      try {
+        if (!this.Sentry) {
+          await teardownEnvironment();
+          return;
+        }
+
+        this.endOpenSpans();
+        await this.Sentry.withActiveSpan(this.transaction, () =>
+          this.Sentry.startSpan(
+            {
+              op: 'teardown',
+              name: this.testPath,
+            },
+            teardownEnvironment
+          )
         );
-      });
-    }
-
-    getVmContext() {
-      if (this.transaction) {
-        this.Sentry.withActiveSpan(this.transaction, () => {
-          const getVmContextSpan = this.Sentry.startInactiveSpan({
-            op: 'getVmContext',
-          });
-          this.getVmContextSpanStack.push(getVmContextSpan);
-        });
+      } finally {
+        if (this.Sentry) {
+          this.transaction.end();
+        }
+        this.describeSpans = null;
+        this.testSpans = null;
+        this.testFunctionSpans = null;
+        this.hookStarts = null;
+        this.openSpans = null;
+        this.hub = null;
+        this.Sentry = null;
       }
-      return super.getVmContext();
     }
 
     /**
      * @returns {string}
      */
     getName(parent) {
-      if (!parent) {
-        return '';
-      }
-
       // Ignore these for now as it adds a level of nesting and I'm not quite sure where it's even coming from
       if (parent.name === 'ROOT_DESCRIBE_BLOCK') {
         return '';
@@ -154,94 +132,41 @@ function createEnvironment({baseEnvironment} = {}) {
       return `${parentName ? `${parentName} >` : ''} ${parent.name}`.trim();
     }
 
-    getData({name, ...event}) {
-      switch (name) {
-        case 'run_describe_start':
-        case 'run_describe_finish':
-          if (name === 'run_describe_finish') {
-            const span = this.getVmContextSpanStack.pop();
-            if (span) {
-              span.end();
-            }
-          }
+    startTrackedSpan(options, parentSpan) {
+      let span;
+      this.Sentry.withActiveSpan(parentSpan, () => {
+        span = this.Sentry.startInactiveSpan(options);
+      });
+      this.openSpans.add(span);
+      return span;
+    }
 
-          return {
-            op: 'describe',
-            obj: event.describeBlock,
-            parentObj: event.describeBlock.parent,
-            dataStore: this.runDescribe,
-            parentStore: this.runDescribe,
-          };
+    endTrackedSpan(span, {endTime, error, isOkay} = {}) {
+      if (!span || !this.openSpans.has(span)) {
+        return;
+      }
 
-        case 'test_started':
-        case 'test_start':
-        case 'test_done':
-          return {
-            op: 'test',
-            obj: event.test,
-            parentObj: event.test.parent,
-            dataStore: this.testContainers,
-            parentStore: this.runDescribe,
-            /**
-             * @param {Sentry.Span} span
-             * @returns {Sentry.Span}
-             */
-            beforeFinish: span => {
-              const isOkay = !event.test.errors.length;
-              span.setStatus({code: isOkay ? 1 : 2, message: isOkay ? 'ok' : 'internal_error'});
-              return span;
-            },
-          };
+      try {
+        if (error) {
+          this.Sentry.withActiveSpan(span, () => {
+            this.Sentry.captureException(error);
+          });
+        }
+        if (typeof isOkay === 'boolean') {
+          span.setStatus({
+            code: isOkay ? 1 : 2,
+            message: isOkay ? 'ok' : 'internal_error',
+          });
+        }
+      } finally {
+        span.end(endTime);
+        this.openSpans.delete(span);
+      }
+    }
 
-        case 'test_fn_start':
-        case 'test_fn_success':
-        case 'test_fn_failure':
-          return {
-            op: 'test-fn',
-            obj: event.test,
-            parentObj: event.test,
-            dataStore: this.tests,
-            parentStore: this.testContainers,
-            /**
-             * @param {Sentry.Span} span
-             * @returns {Sentry.Span}
-             */
-            beforeFinish: span => {
-              const isOkay = !event.test.errors.length;
-              span.setStatus({code: isOkay ? 1 : 2, message: isOkay ? 'ok' : 'internal_error'});
-              return span;
-            },
-          };
-
-        case 'hook_start':
-          return {
-            obj: event.hook.parent,
-            op: event.hook.type,
-            dataStore: this.hooks,
-          };
-
-        case 'hook_success':
-        case 'hook_failure':
-          return {
-            obj: event.hook.parent,
-            parentObj: event.test?.parent,
-            dataStore: this.hooks,
-            parentStore: this.testContainers,
-          };
-
-        case 'start_describe_definition':
-        case 'finish_describe_definition':
-        case 'add_test':
-        case 'add_hook':
-        case 'run_start':
-        case 'run_finish':
-        case 'test_todo':
-        case 'setup':
-        case 'teardown':
-          return null;
-
-        default:
-          return null;
+    endOpenSpans() {
+      for (const span of [...this.openSpans].reverse()) {
+        this.endTrackedSpan(span);
       }
     }
 
@@ -250,94 +175,128 @@ function createEnvironment({baseEnvironment} = {}) {
         return;
       }
 
-      const data = this.getData(event);
-      const {name} = event;
-
-      if (!data) {
-        return;
-      }
-
-      const {obj, parentObj, dataStore, parentStore, op, description, beforeFinish} =
-        data;
-
-      const testName = this.getName(obj);
-
-      if (name.includes('start')) {
-        // Make this an option maybe
-        if (!testName) {
+      switch (event.name) {
+        case 'run_describe_start': {
+          const {describeBlock} = event;
+          if (describeBlock.name === 'ROOT_DESCRIBE_BLOCK') {
+            this.describeSpans.set(describeBlock, this.transaction);
+            return;
+          }
+          const parentSpan = this.describeSpans.get(describeBlock.parent);
+          const span = this.startTrackedSpan(
+            {name: this.getName(describeBlock), op: 'describe'},
+            parentSpan
+          );
+          this.describeSpans.set(describeBlock, span);
           return;
         }
 
-        /**
-         * @type {Sentry.Span[]}
-         */
-        const spans = [];
-        const parentName = parentObj && this.getName(parentObj);
-        /**
-         * @type {Parameters<Sentry.startSpan>[0]}
-         */
-        const spanProps = {op, name: description || testName};
-        if (parentObj && parentStore.has(parentName)) {
-          if (Array.isArray(parentStore.get(parentName))) {
-            parentStore.get(parentName).forEach(s => {
-              this.Sentry.withActiveSpan(s, () => {
-                spans.push(this.Sentry.startInactiveSpan(spanProps));
-              });
-            });
-          } else {
-            const parentSpan = parentStore.get(parentName);
-            this.Sentry.withActiveSpan(parentSpan, () => {
-              spans.push(this.Sentry.startInactiveSpan(spanProps));
-            });
+        case 'run_describe_finish': {
+          const {describeBlock} = event;
+          const span = this.describeSpans.get(describeBlock);
+          this.describeSpans.delete(describeBlock);
+          if (span !== this.transaction) {
+            this.endTrackedSpan(span);
           }
-        } else {
-          // By not doing starting a span here we're ignoring beforeEach afterEach spans
-          // Not currently sure how to attach to them to their test spans
-          // They end up dangling on the parent and making a mess
-          // this.Sentry.withActiveSpan(this.transaction, () => {
-          //   spans.push(this.Sentry.startInactiveSpan(spanProps));
-          // });
+          return;
         }
 
-        // If we are starting a test, let's also make it a transaction so we can see our slowest tests
-        if (spanProps.op === 'test') {
-          this.Sentry.withActiveSpan(this.transaction, () => {
-            const testTransaction = this.Sentry.startInactiveSpan({
-              ...spanProps,
-              op: 'jest test',
+        case 'test_started': {
+          const {test} = event;
+          const parentSpan = this.describeSpans.get(test.parent);
+          const span = this.startTrackedSpan(
+            {
               forceTransaction: true,
-            });
-            spans.push(testTransaction);
-          });
+              name: this.getName(test),
+              op: 'jest test',
+            },
+            parentSpan
+          );
+          this.testSpans.set(test, span);
+          return;
         }
 
-        dataStore.set(testName, spans);
-
-        return;
-      }
-
-      if (dataStore.has(testName)) {
-        /**
-         * @type {Sentry.Span[]}
-         */
-        const spans = dataStore.get(testName);
-
-        if (name.includes('failure') && event.error) {
-          this.Sentry.withActiveSpan(spans[0], () => {
-            this.Sentry.captureException(event.error);
-          });
-        }
-
-        spans.forEach(span => {
-          if (beforeFinish) {
-            span = beforeFinish(span);
-            if (!span) {
-              throw new Error('`beforeFinish()` needs to return a span');
-            }
+        case 'test_fn_start': {
+          const {test} = event;
+          if (test.errors.length > 0) {
+            return;
           }
+          const span = this.startTrackedSpan(
+            {name: this.getName(test), op: 'test-fn'},
+            this.testSpans.get(test)
+          );
+          this.testFunctionSpans.set(test, span);
+          return;
+        }
 
-          span.end();
-        });
+        case 'test_fn_success':
+        case 'test_fn_failure': {
+          const {test} = event;
+          const span = this.testFunctionSpans.get(test);
+          this.testFunctionSpans.delete(test);
+          this.endTrackedSpan(span, {
+            error: event.name === 'test_fn_failure' ? event.error : undefined,
+            isOkay: event.name === 'test_fn_success',
+          });
+          return;
+        }
+
+        case 'hook_start': {
+          const {hook} = event;
+          const startTime = timestampInSeconds();
+          const starts = this.hookStarts.get(hook);
+          if (starts === undefined) {
+            this.hookStarts.set(hook, startTime);
+          } else if (Array.isArray(starts)) {
+            starts.push(startTime);
+          } else {
+            this.hookStarts.set(hook, [starts, startTime]);
+          }
+          return;
+        }
+
+        case 'hook_success':
+        case 'hook_failure': {
+          const {hook} = event;
+          const starts = this.hookStarts.get(hook);
+          const startTime = Array.isArray(starts) ? starts.shift() : starts;
+          if (!Array.isArray(starts) || starts.length === 0) {
+            this.hookStarts.delete(hook);
+          }
+          const parentSpan = event.test
+            ? this.testSpans.get(event.test)
+            : this.describeSpans.get(hook.parent);
+          const parentName = this.getName(hook.parent);
+          const span = this.startTrackedSpan(
+            {
+              name: parentName ? `${parentName} > ${hook.type}` : hook.type,
+              op: hook.type,
+              startTime,
+            },
+            parentSpan
+          );
+          this.endTrackedSpan(span, {
+            endTime: timestampInSeconds(),
+            error: event.name === 'hook_failure' ? event.error : undefined,
+            isOkay: event.name === 'hook_success',
+          });
+          return;
+        }
+
+        case 'test_done': {
+          const {test} = event;
+          const functionSpan = this.testFunctionSpans.get(test);
+          this.testFunctionSpans.delete(test);
+          this.endTrackedSpan(functionSpan, {isOkay: false});
+
+          const testSpan = this.testSpans.get(test);
+          this.testSpans.delete(test);
+          this.endTrackedSpan(testSpan, {isOkay: test.errors.length === 0});
+          return;
+        }
+
+        default:
+          return;
       }
     }
   };
