@@ -13,11 +13,11 @@ Install the environment, the Sentry Node SDK, and the Jest environment you use. 
 jsdom:
 
 ```bash
-npm install --save-dev @sentry/jest-environment @sentry/node jest jest-environment-jsdom
+npm install --save-dev @sentry/jest-environment @sentry/node jest @jest/environment-jsdom-abstract jsdom
 ```
 
 For the Node environment, install `jest-environment-node` instead of
-`jest-environment-jsdom`.
+`@jest/environment-jsdom-abstract` and `jsdom`.
 
 Then configure the environment and Sentry options in `jest.config.js`:
 

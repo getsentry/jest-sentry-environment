@@ -41,21 +41,26 @@
   },
   "homepage": "https://github.com/getsentry/jest-sentry-environment#readme",
   "devDependencies": {
-    "jest-environment-jsdom": "^30.4.1",
+    "@jest/environment-jsdom-abstract": "^30.4.1",
     "jest-environment-node": "^30.4.1",
+    "jsdom": "^30.0.1",
     "prettier": "^3.9.5"
   },
   "peerDependencies": {
+    "@jest/environment-jsdom-abstract": ">=30",
     "@sentry/node": ">=10",
     "jest": ">=30",
-    "jest-environment-jsdom": ">=30",
-    "jest-environment-node": ">=30"
+    "jest-environment-node": ">=30",
+    "jsdom": ">=26"
   },
   "peerDependenciesMeta": {
-    "jest-environment-jsdom": {
+    "@jest/environment-jsdom-abstract": {
       "optional": true
     },
     "jest-environment-node": {
+      "optional": true
+    },
+    "jsdom": {
       "optional": true
     }
   },
