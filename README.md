@@ -9,8 +9,8 @@ Adds Sentry performance monitoring to your Jest test suites to find your slowest
 This package requires Node.js 24 or newer, Jest 30 or newer, and `@sentry/node` 10 or
 newer.
 
-Install the environment, the Sentry Node SDK, and the Jest environment you use. For
-jsdom:
+Install this package, the Sentry Node SDK, Jest, and the dependencies for the environment
+you use. For jsdom:
 
 ```bash
 npm install --save-dev @sentry/jest-environment @sentry/node jest @jest/environment-jsdom-abstract jsdom
