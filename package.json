@@ -1,6 +1,6 @@
 {
   "name": "@sentry/jest-environment",
-  "version": "7.0.0",
+  "version": "8.0.0",
   "description": "Automatic performance instrumentation for your Jest tests.",
   "engines": {
     "node": ">=24"
