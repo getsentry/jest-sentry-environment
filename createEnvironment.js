@@ -32,7 +32,20 @@ function getTimeoutAttribute(timeout) {
   return timeout == null ? {} : {'test.timeout_ms': timeout};
 }
 
-function createEnvironment({baseEnvironment = require('jest-environment-jsdom')} = {}) {
+function createJSDOMBaseEnvironment() {
+  const BaseJSDOMEnvironment = require('@jest/environment-jsdom-abstract').default;
+  const jsdom = require('jsdom');
+
+  return {
+    TestEnvironment: class JSDOMEnvironment extends BaseJSDOMEnvironment {
+      constructor(config, context) {
+        super(config, context, jsdom);
+      }
+    },
+  };
+}
+
+function createEnvironment({baseEnvironment = createJSDOMBaseEnvironment()} = {}) {
   const {TestEnvironment: BaseEnvironment} = baseEnvironment;
 
   return class SentryEnvironment extends BaseEnvironment {
