@@ -1,3 +1,9 @@
+## 8.0.0
+
+### New Features ✨
+
+- (jest) Allow choosing the jsdom version by @scttcper in [#31](https://github.com/getsentry/jest-sentry-environment/pull/31)
+
 ## 7.0.0
 
 ### Internal Changes 🔧
