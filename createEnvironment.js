@@ -28,6 +28,25 @@ function getFullName(entry) {
   return names.reverse().join(' > ');
 }
 
+function isSpanStreamingEnabled(sentry) {
+  return sentry.getClient?.()?.getOptions().traceLifecycle === 'stream';
+}
+
+// Streamed spans carry scope attributes, not scope tags. When the SDK streams spans,
+// set the tags as global scope attributes so that every span carries them. Otherwise
+// fall back to tags, which reach transactions and error events.
+function applyTags(sentry, tags) {
+  const globalScope = sentry.getGlobalScope?.();
+  if (
+    isSpanStreamingEnabled(sentry) &&
+    typeof globalScope?.setAttributes === 'function'
+  ) {
+    globalScope.setAttributes(tags);
+    return;
+  }
+  sentry.setTags(tags);
+}
+
 function getTimeoutAttribute(timeout) {
   return timeout == null ? {} : {'test.timeout_ms': timeout};
 }
@@ -71,7 +90,7 @@ function createEnvironment({baseEnvironment = createJSDOMBaseEnvironment()} = {}
       if (!this.sentry.isInitialized()) {
         this.sentry.init(init);
         if (tags) {
-          this.sentry.setTags(tags);
+          applyTags(this.sentry, tags);
         }
       }
 

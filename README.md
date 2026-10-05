@@ -34,6 +34,9 @@ module.exports = {
         tracesSampleRate: 1,
       },
 
+      // When the SDK streams spans (`traceLifecycle: 'stream'`, the default in v11+),
+      // these are set as scope attributes so that every span carries them. Otherwise
+      // they are set as tags.
       tags: {
         branch: process.env.GITHUB_REF,
         commit: process.env.GITHUB_SHA,
