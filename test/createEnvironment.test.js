@@ -195,7 +195,7 @@ test('initializes Sentry without mutating its options', async () => {
   });
 });
 
-test('sets tags as scope attributes when spans are streamed', async () => {
+test('also sets tags as scope attributes when spans are streamed', async () => {
   const {calls, Sentry} = makeSentry({
     traceLifecycle: 'stream',
     hasScopeAttributes: true,
@@ -207,11 +207,11 @@ test('sets tags as scope attributes when spans are streamed', async () => {
     });
 
     assert.deepEqual(calls.attributes, [{branch: 'example'}]);
-    assert.deepEqual(calls.tags, []);
+    assert.deepEqual(calls.tags, [{branch: 'example'}]);
   });
 });
 
-test('sets tags when spans are not streamed', async () => {
+test('only sets tags when spans are not streamed', async () => {
   const {calls, Sentry} = makeSentry({
     traceLifecycle: 'static',
     hasScopeAttributes: true,
@@ -227,7 +227,7 @@ test('sets tags when spans are not streamed', async () => {
   });
 });
 
-test('sets tags when the scope does not support attributes', async () => {
+test('only sets tags when the scope does not support attributes', async () => {
   const {calls, Sentry} = makeSentry({traceLifecycle: 'stream'});
   await withMockedSentry(Sentry, async createEnvironment => {
     makeEnvironment(createEnvironment, {
