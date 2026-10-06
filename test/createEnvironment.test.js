@@ -38,10 +38,24 @@ function makeTest(name, parent, overrides = {}) {
   };
 }
 
-function makeSentry() {
-  const calls = {captured: [], init: [], newTraces: 0, spans: [], tags: []};
+function makeSentry({traceLifecycle, hasScopeAttributes = false} = {}) {
+  const calls = {
+    attributes: [],
+    captured: [],
+    init: [],
+    newTraces: 0,
+    spans: [],
+    tags: [],
+  };
   let activeSpan;
   let initialized = false;
+  const globalScope = hasScopeAttributes
+    ? {
+        setAttributes(attributes) {
+          calls.attributes.push(attributes);
+        },
+      }
+    : {};
   const Sentry = {
     init(options) {
       initialized = true;
@@ -49,6 +63,12 @@ function makeSentry() {
     },
     isInitialized() {
       return initialized;
+    },
+    getClient() {
+      return initialized ? {getOptions: () => ({traceLifecycle})} : undefined;
+    },
+    getGlobalScope() {
+      return globalScope;
     },
     setTags(tags) {
       calls.tags.push(tags);
@@ -172,6 +192,51 @@ test('initializes Sentry without mutating its options', async () => {
     assert.equal(calls.spans[0].endCalls, 1);
     assert.equal(environment.global.Sentry, undefined);
     assert.equal(environment.global.transaction, undefined);
+  });
+});
+
+test('also sets tags as scope attributes when spans are streamed', async () => {
+  const {calls, Sentry} = makeSentry({
+    traceLifecycle: 'stream',
+    hasScopeAttributes: true,
+  });
+  await withMockedSentry(Sentry, async createEnvironment => {
+    makeEnvironment(createEnvironment, {
+      init: {dsn: 'https://public@example.com/1'},
+      tags: {branch: 'example'},
+    });
+
+    assert.deepEqual(calls.attributes, [{branch: 'example'}]);
+    assert.deepEqual(calls.tags, [{branch: 'example'}]);
+  });
+});
+
+test('only sets tags when spans are not streamed', async () => {
+  const {calls, Sentry} = makeSentry({
+    traceLifecycle: 'static',
+    hasScopeAttributes: true,
+  });
+  await withMockedSentry(Sentry, async createEnvironment => {
+    makeEnvironment(createEnvironment, {
+      init: {dsn: 'https://public@example.com/1'},
+      tags: {branch: 'example'},
+    });
+
+    assert.deepEqual(calls.attributes, []);
+    assert.deepEqual(calls.tags, [{branch: 'example'}]);
+  });
+});
+
+test('only sets tags when the scope does not support attributes', async () => {
+  const {calls, Sentry} = makeSentry({traceLifecycle: 'stream'});
+  await withMockedSentry(Sentry, async createEnvironment => {
+    makeEnvironment(createEnvironment, {
+      init: {dsn: 'https://public@example.com/1'},
+      tags: {branch: 'example'},
+    });
+
+    assert.deepEqual(calls.attributes, []);
+    assert.deepEqual(calls.tags, [{branch: 'example'}]);
   });
 });
 
