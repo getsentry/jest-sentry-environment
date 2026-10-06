@@ -1,3 +1,9 @@
+## 8.1.0
+
+### New Features ✨
+
+- (jest) Also set tags as scope attributes when spans are streamed by @billyvg in [#32](https://github.com/getsentry/jest-sentry-environment/pull/32)
+
 ## 8.0.0
 
 ### New Features ✨
