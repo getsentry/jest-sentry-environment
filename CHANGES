@@ -1,3 +1,21 @@
+## 8.1.0
+
+### New Features ✨
+
+- (jest) Also set tags as scope attributes when spans are streamed by @billyvg in [#32](https://github.com/getsentry/jest-sentry-environment/pull/32)
+
+## 8.0.0
+
+### New Features ✨
+
+- (jest) Allow choosing the jsdom version by @scttcper in [#31](https://github.com/getsentry/jest-sentry-environment/pull/31)
+
+## 7.0.0
+
+### Internal Changes 🔧
+
+- (jest) Modernize Sentry test environment by @scttcper in [#30](https://github.com/getsentry/jest-sentry-environment/pull/30)
+
 ## 6.1.0
 
 ### Various fixes & improvements
