@@ -1,3 +1,10 @@
+## 8.1.1
+
+### Bug Fixes 🐛
+
+- Correct upstream url org to getsentry by @JoshuaKGoldberg in [#29](https://github.com/getsentry/jest-sentry-environment/pull/29)
+- Clone sentryConfig before mutation by @JoshuaKGoldberg in [#28](https://github.com/getsentry/jest-sentry-environment/pull/28)
+
 ## 8.1.0
 
 ### New Features ✨
