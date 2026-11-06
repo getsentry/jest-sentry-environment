@@ -73,7 +73,7 @@ function createEnvironment({baseEnvironment = createJSDOMBaseEnvironment()} = {}
 
       const [config, context] = args;
 
-      const options = config.projectConfig.testEnvironmentOptions.sentryConfig;
+      const options = structuredClone(config.projectConfig.testEnvironmentOptions.sentryConfig);
 
       if (
         !options ||
